@@ -1,0 +1,244 @@
+---
+title: "Practical Machine Learning Final Project"
+date: '`r Sys.time()`'
+output:
+  html_document:
+    fig_caption: yes
+    number_sections: no
+    theme: cosmo
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+# Background
+
+Data for this project comes from 6 male participants who wore accelerometers on the belt, forearm, arm, and dumbbell. The participants performed barbell lifts correctly and incorrectly in five different ways. The goal of this exercise is to predict, based on a number of different variables collected from the accelerometers, in which of the five ways an activity was performed (i.e. the `classe` variable).
+
+To do so, I will use several classification algorithms to predict the class variable based on all the included variables in the dataset: (a) decision tree, (b) random forest, (c) boosting, and (d) linear discriminant analysis. I will first use cross-validation to divide the provided training data into two parts, a training set and a validation set. I will fit each model using the testing set data, and use the resulting model fit to predict `classe` values in the validation set. By examining the accuracy of each method in predicting values on the validation set, I can predict which method will perform best on the test set. After choosing the most accurate algorithm, I will use the specified model fit to predict `classe` values for the provided testing data.
+
+```{r setup, warning = FALSE, message = FALSE}
+
+# clear workspace
+rm(list=ls())
+
+# set knitr options
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
+
+# load packages
+library(rprojroot)
+library(data.table)
+library(tidyverse)
+library(caret)
+library(rattle)
+library(randomForest)
+library(kableExtra)
+
+# source files within this project
+path <- function(x) find_root_file(x, criterion = has_file('practical-machine-learning-course.Rproj'))
+
+# set seed
+set.seed(8054)
+
+```
+
+# Prepare the data
+
+## Load data
+
+```{r load_data}
+
+# load in the raw data
+training_raw <- as.data.frame(fread(path('pml-training.csv'), na.strings = c('NA', '', '#DIV/0')) %>%
+  mutate(classe = as.factor(classe)))
+testing <- as.data.frame(fread(path('pml-testing.csv'), na.strings = c('NA', '', '#DIV/0')))
+
+```
+
+## Partition into training and validation sets
+
+```{r partition_data}
+
+inTrain <- createDataPartition(training_raw$classe, p = 0.7, list = FALSE)
+training <- training_raw[inTrain,]
+validation <- training_raw[-inTrain,]
+
+```
+
+## Remove irrelevant variables and variables with >= 50% NAs
+
+```{r remove_vars}
+
+# remove the `V1` variable from all data
+# and make classe a factor variable
+training <- training %>%
+  select(-V1)
+validation <- validation %>%
+  select(-V1)
+testing <- testing %>%
+  select(-V1)
+
+# store problem numbers in testing data as a vector (will use later)
+testingProblemIDs <- testing$problem_id
+
+# then remove the `problem_id` variable
+testing <- testing %>%
+  select(-problem_id)
+
+# remove variables with majority NA values from all sets
+numRows <- nrow(training)
+include <- NULL
+for(ii in 1:ncol(training)){
+  sumNAs <- sum(is.na(training[,ii]))/numRows
+  if (sumNAs < 0.5) {
+    include <- c(include, ii)
+  } else {
+  }
+}
+
+trainingSet <- training[,include]
+validationSet <- validation[,include]
+indicesForTest <- include[1:length(include)-1] # account for 1 less variable in testing data (classe)
+testingSet <- testing[,indicesForTest]
+```
+
+## Remove variables with near-zero-variance
+
+```{r remove_vars_nearZeroVar}
+
+nzv_training <- nearZeroVar(trainingSet, saveMetrics = FALSE)
+trainingSet <- trainingSet[,-nzv_training]
+nzv_validation <- nearZeroVar(validationSet, saveMetrics = FALSE)
+validationSet <- validationSet[,-nzv_validation]
+nzv_testing <- nearZeroVar(testingSet, saveMetrics = FALSE)
+testingSet <- testingSet[,-nzv_testing]
+
+# check that column names are still consistent across datasets
+all(names(trainingSet) == names(validationSet))
+all(names(trainingSet)[1:length(testingSet)] == names(testingSet))
+
+```
+
+## Convert variable types
+
+```{r convert_vars}
+
+trainingSet <- trainingSet %>% mutate_if(is.character, as.factor)
+validationSet <- validationSet %>% mutate_if(is.character, as.factor)
+testingSet <- testingSet %>% mutate_if(is.character, as.factor)
+
+```
+
+# Models
+
+## Option 1: Decision tree
+
+```{r model_rpart}
+
+# fit the model 
+mod_rpart <- train(classe ~ ., method = "rpart", data = trainingSet)
+
+# show the decision tree
+fancyRpartPlot(mod_rpart$finalModel)
+
+```
+
+```{r predict_rpart}
+
+# predict validation set values based on model fit
+predict_rpart <- predict(mod_rpart, newdata = validationSet)
+ 
+# compute accuracy of model in predicting validation set classe
+confusionMatrix(predict_rpart, validationSet$classe)$overall[1]
+
+```
+
+## Option 2: Random forest
+
+```{r model_rf}
+
+# fit the model 
+mod_rf <- randomForest(classe ~ ., data = trainingSet)
+
+# predict validation set values based on model fit
+predict_rf <- predict(mod_rf, newdata = validationSet)
+ 
+# compute accuracy of model in predicting validation set classe
+confusionMatrix(predict_rf, validationSet$classe)$overall[1]
+
+```
+
+## Option 3: Boosting
+
+```{r model_gbm}
+
+# fit the model 
+mod_gbm <- train(classe ~ ., method = "gbm", data = trainingSet, verbose = FALSE, 
+                 trControl = trainControl(method = "cv", number = 8)) # added training control options, otherwise too computationally intensive for my machine
+
+# predict validation set values based on model fit
+predict_gbm <- predict(mod_gbm, newdata = validationSet)
+ 
+# compute accuracy of model in predicting validation set classe
+confusionMatrix(predict_gbm, validationSet$classe)$overall[1]
+
+```
+
+## Option 4: Linear discriminant 
+
+```{r model_lda}
+
+# fit the model 
+mod_lda <- train(classe ~ ., method = "lda", data = trainingSet)
+
+# predict validation set values based on model fit
+predict_lda <- predict(mod_lda, newdata = validationSet)
+ 
+# compute accuracy of model in predicting validation set classe
+confusionMatrix(predict_lda, validationSet$classe)$overall[1]
+
+```
+
+# Conclusions
+
+## Most accurate prediction method
+
+Of all methods used, the **random forest** method yielded the highest accuracy in terms of predictions of the validation set. It is worth noting that the boosting method yielded an accuracy value that was only very slightly lower, whereas the linear discriminant and decision tree methods were less accurate. The percent expected out-of-sample error for the random forest method is calculated below:
+
+```{r calculate_accuracy}
+
+accuracy_rf <- confusionMatrix(predict_rf, validationSet$classe)$overall[1]
+expected_error <- 100 - accuracy_rf*100
+expected_error 
+
+```
+
+## Most important predictor variables according to the random forest method
+
+Using the random forest method method, the following 5 variables were most useful for prediction:
+
+```{r important_predictors}
+
+indices <- order(varImp(mod_rf))[1:5]
+names(testingSet)[indices]
+
+```
+
+## Predictions of test set values
+
+Using this method, I obtain the following predictions from the original `testing` data: 
+
+```{r predict_testing}
+
+# ensure that training set and testing set data have matching factor levels
+
+levels(testingSet$user_name) <- levels(trainingSet$user_name)
+levels(testingSet$cvtd_timestamp) <- levels(trainingSet$cvtd_timestamp)
+
+predictedVals <- predict(mod_rf, newdata = testingSet)
+kable(data.frame(testingProblemIDs, predictedVals), format = 'html') %>%
+  kable_styling('striped', full_width = FALSE)
+
+```

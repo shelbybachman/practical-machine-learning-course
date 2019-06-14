@@ -1,2 +1,2 @@
 # practical-machine-learning-course
-Final project for Coursera's Practical Machine Learning course
+This repository contains Shelby's final project for Coursera's Practical Machine Learning course
